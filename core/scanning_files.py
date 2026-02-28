@@ -79,7 +79,7 @@ def chroot():
             return False
 
     print("Entering chroot...")
-    subprocess.run(["sudo", "chroot", "/mnt", "/bin/bash"])
+    subprocess.run(["sudo chroot /mnt /bin/bash"], text=True, shell=True)
     return True
 
 def detect_distro():
