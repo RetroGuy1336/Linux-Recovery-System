@@ -4,10 +4,8 @@ import os
 
 def main():
     if os.geteuid() != 0:
-        print("Execute with sudo!")
         exit()
-    if scanning_files():
-        pass
+    scanning_files()
 
 if __name__ == "main":
     main()
