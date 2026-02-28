@@ -77,14 +77,16 @@ def detect_distro():
     with open(os_release, "r") as f:
         data = f.read().lower()
 
-    if "ubuntu" in data:
-        return "ubuntu"
-    elif "fedora" in data:
-        return "fedora"
-    elif "arch" in data:
+    if "id_like=debian" in data or "id_like=ubuntu" in data:
+        return "debian_based"
+
+    if "id=fedora" in data or "id_like=\"rhel fedora\"" in data:
+        return "fedora_based"
+
+    if "id=arch" in data:
         return "arch"
-    else:
-        return "unknown"
+
+    return "unknown"
 
 
 def run_in_chroot(command):
@@ -114,6 +116,8 @@ def scanning_files():
         print("[!] No Linux system detected in /mnt.")
         subprocess.run(["umount", "-R", "/mnt"])
         return
+    if distro != "debian_based":
+        print("For now, the program only supports Debian or Ubuntu-based distributions. The developer who wrote the code is too lazy for that.")
 
     print(f"[✔] Detected distribution: {distro.upper()}")
 
