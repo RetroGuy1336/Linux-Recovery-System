@@ -126,5 +126,5 @@ def scanning_files():
                     break
     else:
         print("Failed to mount the system")
-if __name__ == "__main__":
-    scanning_files()
+
+scanning_files()
