@@ -99,7 +99,7 @@ def detect_distro():
     except FileNotFoundError:
         return None
 
-def main():  
+def scanning_files():  
     print("Starting the Linux scan errors...")
     time.sleep(3.22)
     detect_partition()
@@ -127,4 +127,4 @@ def main():
     else:
         print("Failed to mount the system")
 if __name__ == "__main__":
-    main()
+    scanning_files()
