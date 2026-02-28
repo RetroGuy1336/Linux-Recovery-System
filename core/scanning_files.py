@@ -2,7 +2,6 @@ import subprocess
 import os
 import time
 import pathlib
-import json
 import re
 
 def clear():
@@ -14,23 +13,27 @@ def detect_partition():
 
 
 def mount_sys():
+    """Mount the target root (and optionally EFI) and return the root device path.
+
+    Returns the root partition string on success, or None on failure.
+    """
     try:
         root = input("Root partition (ex: /dev/sda2): ").strip()
 
         if not root.startswith("/dev/"):
             print("Invalid partition format!")
-            return False
+            return None
 
-        # Monta root primeiro
-        result = subprocess.run(
-            ["sudo", "mount", root, "/mnt"],
+        # mount root first
+        result = subprocess.run([
+            "sudo", "mount", root, "/mnt"],
             capture_output=True,
             text=True
         )
 
         if result.returncode != 0:
             print("Root mount error:", result.stderr)
-            return False
+            return None
 
         efi = input("Do you have a separate EFI partition? [Y/N] ").lower().strip()
 
@@ -45,11 +48,11 @@ def mount_sys():
             )
 
         print("System mounted successfully!")
-        return True
+        return root
 
     except Exception as e:
         print("Error:", e)
-        return False
+        return None
     
 def detect_system():
     if os.path.exists("/mnt/etc/os-release"):
@@ -99,31 +102,30 @@ def detect_distro():
     except FileNotFoundError:
         return None
 
-def scanning_files():  
+def scanning_files():
     print("Starting the Linux scan errors...")
     time.sleep(3.22)
     detect_partition()
-    if mount_sys():
+    root = mount_sys()
+    if root:
         if detect_system():
             chroot()
             distro = detect_distro()
             if distro:
                 print(f"Detected system: {distro}")
                 if distro == "ubuntu":
-                    root_partition = pathlib.Path("/")
-                    grub_file = pathlib.glob("***/grub")
-                    for find_file in grub_file:
-                        print(find_file)
-                        if "/mnt/boot/grub" not in grub_file:
-                            print("GRUB didn't find")
-                            print("Trying to install GRUB")
-                            disk = re.sub(r'\d+$', '', mount_sys.root())
-                            subprocess.run([f"grub-install {disk}"])
-                            subprocess.run("update-grub")
+                    grub_path = pathlib.Path("/mnt/boot/grub")
+                    if not grub_path.exists():
+                        print("GRUB not found")
+                        print("Trying to install GRUB")
+                        # disk is root without partition number
+                        disk = re.sub(r"\d+$", "", root)
+                        subprocess.run(["sudo", "grub-install", disk])
+                        subprocess.run(["sudo", "update-grub"])
+                    else:
+                        print("GRUB appears to be installed")
             else:
-                while True:
-                    print("Could not detect Linux system")
-                    break
+                print("Could not detect Linux system")
     else:
         print("Failed to mount the system")
 
