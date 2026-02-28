@@ -7,5 +7,4 @@ def main():
         exit()
     scanning_files()
 
-if __name__ == "main":
-    main()
+main()
