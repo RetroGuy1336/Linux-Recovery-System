@@ -1,5 +1,5 @@
 import time
-from core import scanning_files
+from core.scanning_files import scanning_files
 import os
 
 def main():
