@@ -1,106 +1,136 @@
 import subprocess
 import os
-import time
-import pathlib
 import re
 
+
 def clear_screen():
-    subprocess.run(['clear'])
+    subprocess.run(["clear"])
+
 
 def list_partitions():
-    print("--- Current Partitions ---")
-    result = subprocess.run(["lsblk", "-o", "NAME,FSTYPE,SIZE,MOUNTPOINT,LABEL"], capture_output=True, text=True)
+    print("=== Available Partitions ===")
+    result = subprocess.run(
+        ["lsblk", "-o", "NAME,FSTYPE,SIZE,MOUNTPOINT,LABEL"],
+        capture_output=True,
+        text=True
+    )
     print(result.stdout)
 
+
 def mount_system():
-    """Mounts the target root and optional EFI partition."""
+    """
+    Mounts the Linux root partition and optionally the EFI partition.
+    Returns the root partition path or None on failure.
+    """
     try:
-        root_part = input("Enter the Root partition (exemple: /dev/sda2): ").strip()
+        root_partition = input("Enter the ROOT partition (e.g. /dev/sda2): ").strip()
 
-        if not os.path.exists(root_part):
-            print(f"Error: Partition {root_part} not found.")
+        if not os.path.exists(root_partition):
+            print(f"[!] Partition not found: {root_partition}")
             return None
 
-        # Mount root to /mnt
-        result = subprocess.run(["sudo", "mount", root_part, "/mnt"], capture_output=True, text=True)
+        print(f"[+] Mounting {root_partition} to /mnt...")
+        result = subprocess.run(
+            ["mount", root_partition, "/mnt"],
+            capture_output=True,
+            text=True
+        )
+
         if result.returncode != 0:
-            print(f"Mount error: {result.stderr}")
+            print(f"[!] Mount error: {result.stderr}")
             return None
 
-        # Check for EFI
-        has_efi = input("Is there a separate EFI partition? [y/N]: ").lower().strip()
-        if has_efi == 'y':
-            efi_part = input("Enter the EFI partition (e.g., /dev/sda1): ").strip()
+        efi_choice = input("Is there a separate EFI partition? [y/N]: ").lower().strip()
+        if efi_choice == "y":
+            efi_partition = input("Enter the EFI partition (e.g. /dev/sda1): ").strip()
             os.makedirs("/mnt/boot/efi", exist_ok=True)
-            subprocess.run(["sudo", "mount", efi_part, "/mnt/boot/efi"])
+            subprocess.run(["mount", efi_partition, "/mnt/boot/efi"])
 
-        print("System mounted successfully at /mnt.")
-        return root_part
+        print("[✔] System mounted successfully.")
+        return root_partition
 
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        print(f"[!] Unexpected error while mounting: {e}")
         return None
 
-def prepare_chroot_environment():
-    """Binds necessary system directories for GRUB to work inside chroot."""
-    print("Preparing virtual filesystems...")
-    mounts = ["/dev", "/dev/pts", "/proc", "/sys", "/run"]
-    for m in mounts:
-        target = f"/mnt{m}"
-        subprocess.run(["sudo", "mount", "--bind", m, target])
+
+def prepare_chroot():
+    """
+    Bind required virtual filesystems for chroot operations.
+    """
+    print("[+] Preparing chroot environment...")
+    for fs in ["/dev", "/dev/pts", "/proc", "/sys", "/run"]:
+        target = f"/mnt{fs}"
+        os.makedirs(target, exist_ok=True)
+        subprocess.run(["mount", "--bind", fs, target])
+
 
 def detect_distro():
-    """Detects the Linux distribution by looking inside the mounted /mnt."""
-    os_release_path = "/mnt/etc/os-release"
-    if not os.path.exists(os_release_path):
-        return None
-    
-    with open(os_release_path) as f:
-        data = f.read().lower()
-        if "ubuntu" in data: return "ubuntu"
-        if "fedora" in data: return "fedora"
-        if "arch" in data: return "arch"
-    return "unknown"
+    """
+    Detects the Linux distribution from /etc/os-release.
+    """
+    os_release = "/mnt/etc/os-release"
 
-def run_chroot_command(command):
-    """Executes a command inside the chroot environment without blocking."""
-    full_cmd = f"sudo chroot /mnt {command}"
-    print(f"Running in chroot: {command}")
-    return subprocess.run(full_cmd, shell=True)
+    if not os.path.exists(os_release):
+        return None
+
+    with open(os_release, "r") as f:
+        data = f.read().lower()
+
+    if "ubuntu" in data:
+        return "ubuntu"
+    elif "fedora" in data:
+        return "fedora"
+    elif "arch" in data:
+        return "arch"
+    else:
+        return "unknown"
+
+
+def run_in_chroot(command):
+    """
+    Executes a command inside the mounted system using chroot.
+    """
+    print(f"[chroot] {command}")
+    return subprocess.run(
+        ["chroot", "/mnt"] + command.split(),
+        text=True
+    )
+
 
 def scanning_files():
     clear_screen()
-    print("=== Linux System Repair Tool ===")
+    print("=== Linux Recovery System ===\n")
+
     list_partitions()
-    
-    root_device = mount_system()
-    if not root_device:
+
+    root_partition = mount_system()
+    if not root_partition:
+        print("[!] Aborting recovery.")
         return
 
     distro = detect_distro()
     if not distro:
-        print("No Linux installation detected in /mnt. Unmounting...")
-        subprocess.run(["sudo", "umount", "-R", "/mnt"])
+        print("[!] No Linux system detected in /mnt.")
+        subprocess.run(["umount", "-R", "/mnt"])
         return
 
-    print(f"Detected System: {distro.capitalize()}")
-    prepare_chroot_environment()
+    print(f"[✔] Detected distribution: {distro.upper()}")
 
-    # Automating the GRUB repair
+    prepare_chroot()
+
+    # === GRUB repair (BIOS only for now) ===
     if distro == "ubuntu":
-        # Extract disk name from partition (e.g., /dev/sda2 -> /dev/sda)
-        disk = re.sub(r"\d+$", "", root_device)
-        
-        print(f"Reinstalling GRUB on {disk}...")
-        # We run commands directly. No 'bash' blocking the script.
-        run_chroot_command(f"grub-install {disk}")
-        run_chroot_command("update-grub")
-        
-        print("\nRepair finished! You can now reboot.")
-    else:
-        print(f"Auto-repair for {distro} is not implemented yet.")
+        disk = re.sub(r"\d+$", "", root_partition)
+        print(f"[+] Reinstalling GRUB on {disk}...")
 
-    # Cleanup: Optional but recommended
-    # subprocess.run(["sudo", "umount", "-R", "/mnt"])
+        run_in_chroot(f"grub-install {disk}")
+        run_in_chroot("update-grub")
+
+        print("\n[✔] GRUB repair completed successfully!")
+        print("You can now reboot your system.")
+
+    else:
+        print(f"[!] Automatic repair for {distro} is not implemented yet.")
 
 scanning_files()
