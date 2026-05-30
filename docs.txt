@@ -1,0 +1,345 @@
+Linux Recovery System - Technical Documentation
+================================================
+
+1. INTRODUCTION
+===============
+
+The Linux Recovery System constitutes a command-line utility engineered to facilitate the recovery and repair of a compromised Linux installation. The application architecture consists of two principal components: a main entrypoint module and a specialized recovery module housing the core operational logic.
+
+2. MAIN MODULE (main.py)
+=======================
+
+2.1 Module Dependencies
+-----------------------
+The main module imports the following components:
+
+* `time` — Standard Python library providing time-related functions. Although imported, this module is not actively utilized in the current implementation and remains available for future enhancements.
+
+* `from core.scanning_files import scanning_files` — Importation of the primary recovery function from the specialized recovery module, enabling invocation of the recovery sequence.
+
+* `os` — Standard Python library providing OS-level interactions, particularly for privilege level verification.
+
+2.2 Function: main()
+--------------------
+The `main()` function serves as the application's primary entrypoint and implements the following logic:
+
+**Privilege Verification:**
+`if os.geteuid() != 0:`
+    This conditional statement invokes `os.geteuid()`, which retrieves the effective user identifier (UID) of the current process. The condition evaluates to True if the UID is not equal to 0 (root). By convention in Unix-like systems, only the root user possesses UID 0. This verification ensures that the utility operates with requisite administrative privileges.
+
+**Insufficient Privilege Handling:**
+`print("Execute with sudo!")`
+    Should the privilege verification fail, this diagnostic message is presented to the user, explicitly directing them to execute the program with `sudo` command.
+
+`exit()`
+    The process terminates with exit code 0 if insufficient privileges are detected.
+
+**Recovery Initiation:**
+`scanning_files()`
+    If the privilege verification succeeds, this function—defined within the recovery module—is invoked to initiate the recovery sequence.
+
+**Module Execution:**
+`main()`
+    The module concludes with an unconditional invocation of the `main()` function.
+
+3. RECOVERY MODULE (core/scanning_files.py)
+===========================================
+
+3.1 Module Dependencies
+-----------------------
+The recovery module imports three critical libraries:
+
+* `subprocess` — Enables execution of external system commands, essential for invoking Linux utilities such as `lsblk`, `mount`, `chroot`, and GRUB-related commands.
+
+* `os` — Provides OS-level operations, principally directory creation and existence verification.
+
+* `re` — Regular expression library utilized for pattern matching, specifically for extracting disk identifiers from partition paths.
+
+3.2 Function: clear_screen()
+----------------------------
+Purpose: Eliminates preceding console output to present a pristine interface.
+
+Implementation:
+`subprocess.run(["clear"])`
+    Invokes the external `clear` system command via subprocess. This command clears all displayed terminal content, providing a clean slate for subsequent recovery system display.
+
+3.3 Function: list_partitions()
+-------------------------------
+Purpose: Enumerates and displays all available storage devices and partitions.
+
+Implementation:
+`subprocess.run(["lsblk", "-o", "NAME,FSTYPE,SIZE,MOUNTPOINT,LABEL"], capture_output=True, text=True)`
+
+Command Components:
+* `lsblk` — System command listing block devices
+* `-o NAME,FSTYPE,SIZE,MOUNTPOINT,LABEL` — Output column specification:
+  - NAME: Device identifier (e.g., sda, sda1)
+  - FSTYPE: Filesystem type (e.g., ext4, ntfs, vfat)
+  - SIZE: Storage capacity
+  - MOUNTPOINT: Current mount location
+  - LABEL: User-defined partition label
+
+* `capture_output=True` — Directs stdout and stderr capture for programmatic access
+* `text=True` — Decodes output to string format for display
+
+3.4 Function: mount_system()
+----------------------------
+Purpose: Manages the mounting of system partitions and EFI partitions.
+
+**Partition Path Acquisition:**
+`root_partition = input("Enter the ROOT partition (e.g. /dev/sda2): ").strip()`
+    Prompts user to specify the root partition path. The `.strip()` method removes leading and trailing whitespace.
+
+**Partition Existence Validation:**
+`if not os.path.exists(root_partition):`
+    The `os.path.exists()` function verifies that the specified partition path exists within the `/dev` directory. Non-existent paths trigger an error message and function return with `None`.
+
+**Root Partition Mounting:**
+`subprocess.run(["mount", root_partition, "/mnt"], capture_output=True, text=True)`
+    The `mount` command mounts the specified root partition to `/mnt`, the conventional location for mounting foreign filesystems during recovery operations. Output capture enables error detection.
+
+**Mount Operation Validation:**
+`if result.returncode != 0:`
+    Evaluates the return code of the mount command. Non-zero values indicate command failure, and stderr content is displayed to the user.
+
+**EFI Partition Detection:**
+`efi_choice = input("Is there a separate EFI partition? [y/N]: ").lower().strip()`
+    Prompts user regarding the presence of an auxiliary EFI partition. Input is normalized to lowercase and whitespace is removed.
+
+**EFI Partition Mounting (Conditional):**
+When user confirms EFI partition presence:
+`efi_partition = input("Enter the EFI partition (e.g. /dev/sda1): ").strip()`
+    User specifies the EFI partition device path.
+
+`os.makedirs("/mnt/boot/efi", exist_ok=True)`
+    Creates the directory hierarchy `/mnt/boot/efi` if absent. The `exist_ok=True` parameter prevents errors if directories already exist.
+
+`subprocess.run(["mount", efi_partition, "/mnt/boot/efi"])`
+    Mounts the EFI partition to the created directory.
+
+**Success Notification:**
+`print("[✔] System mounted successfully.")`
+    Upon successful mounting, a confirmation message is displayed.
+
+**Return Value:**
+`return root_partition` or `None`
+    Returns the root partition path upon success, or `None` upon failure.
+
+**Exception Handling:**
+`except Exception as e:`
+    Catches unexpected errors during the mounting process and presents diagnostic output.
+
+3.5 Function: prepare_chroot()
+------------------------------
+Purpose: Configures the chroot environment by bind-mounting critical virtual filesystems.
+
+**Filesystem Enumeration:**
+`for fs in ["/dev", "/dev/pts", "/proc", "/sys", "/run"]:`
+    Iterates through essential virtual filesystems:
+
+* `/dev` — Device node directory containing character and block device references
+* `/dev/pts` — Pseudo-terminal slave devices for terminal emulation
+* `/proc` — Virtual filesystem exposing kernel information and process details
+* `/sys` — Virtual filesystem exposing kernel subsystem and device information
+* `/run` — Runtime data directory for transient application state
+
+**Bind Mount Operations:**
+`target = f"/mnt{fs}"`
+    Constructs the target path by prefixing `/mnt` to the filesystem path.
+
+`os.makedirs(target, exist_ok=True)`
+    Establishes the target directory structure within the mounted system if absent.
+
+`subprocess.run(["mount", "--bind", fs, target])`
+    Creates a bind mount, establishing a secondary mount point for the source filesystem. This ensures that applications executing within the chroot environment access identical kernel resources as the host system.
+
+3.6 Function: detect_distro()
+-----------------------------
+Purpose: Identifies the Linux distribution by parsing the `/mnt/etc/os-release` file.
+
+**File Path Definition:**
+`os_release = "/mnt/etc/os-release"`
+    Specifies the standard location of distribution identification metadata.
+
+**File Existence Verification:**
+`if not os.path.exists(os_release):`
+    Confirms file presence. Returns `None` if the file is absent, indicating absence of a detectable Linux system.
+
+**File Content Processing:**
+`with open(os_release, "r") as f:`
+    Opens the file in read mode using context management.
+
+`data = f.read().lower()`
+    Reads entire file content and normalizes to lowercase for case-insensitive pattern matching.
+
+**Distribution Pattern Matching:**
+The function examines normalized content for characteristic patterns:
+
+Debian-based Detection:
+`if "id_like=debian" in data or "id_like=ubuntu" in data:`
+    Returns `"debian_based"` for Debian or Ubuntu distributions.
+
+Fedora-based Detection:
+`if "id=fedora" in data or "id_like=\"rhel fedora\"" in data:`
+    Returns `"fedora_based"` for Fedora or RedHat-derived distributions.
+
+Arch Detection:
+`if "id=arch" in data:`
+    Returns `"arch"` for Arch Linux distributions.
+
+**Default Return:**
+`return "unknown"`
+    Returns `"unknown"` for unrecognized or unhandled distributions.
+
+3.7 Function: run_in_chroot(command)
+------------------------------------
+Purpose: Executes commands within the chroot environment of the mounted system.
+
+**Command Parsing and Execution:**
+`print(f"[chroot] {command}")`
+    Displays the command being executed for user visibility and debugging.
+
+`subprocess.run(["chroot", "/mnt"] + command.split(), text=True)`
+    Executes the command within chroot:
+    - `chroot /mnt` — Changes the apparent root directory to `/mnt` for the executed command
+    - `command.split()` — Converts the command string into a list of arguments by splitting on whitespace
+    - `text=True` — Ensures output text decoding
+    - The concatenation `["chroot", "/mnt"] + command.split()` constructs the complete command invocation
+
+**Return Value:**
+    Returns the subprocess result object containing return code, stdout, and stderr.
+
+3.8 Function: scanning_files()
+------------------------------
+Purpose: Orchestrates the complete recovery sequence.
+
+**System Initialization:**
+`clear_screen()`
+    Clears console output for presentation clarity.
+
+`print("=== Linux Recovery System ===\n")`
+    Displays the application header.
+
+**Partition Enumeration and User Selection:**
+`list_partitions()`
+    Displays available storage devices and partitions.
+
+`root_partition = mount_system()`
+    Prompts user to specify and mount the root partition. Stores the partition path or continues on `None` return.
+
+**Failure Handling:**
+`if not root_partition:`
+    If mounting fails, displays an abort message and returns from the function.
+
+**Distribution Detection:**
+`distro = detect_distro()`
+    Identifies the Linux distribution type.
+
+**No Detectable System Handling:**
+`if not distro:`
+    If the mounted partition contains no detectable Linux system:
+    - `subprocess.run(["umount", "-R", "/mnt"])` — Recursively unmounts all mounted filesystems under `/mnt`
+    - `return` — Terminates recovery sequence
+
+**Unsupported Distribution Handling:**
+`if distro != "debian_based":`
+    For non-Debian distributions, a notification is displayed indicating current limitation.
+
+**Chroot Environment Preparation:**
+`prepare_chroot()`
+    Bind-mounts essential virtual filesystems to support chroot operations.
+
+**GRUB Bootloader Repair (Ubuntu/Debian):**
+`if distro == "ubuntu":`
+    Initiates repair only for Ubuntu systems (more restrictive than "debian_based").
+
+**Disk Identifier Extraction:**
+`disk = re.sub(r"\d+$", "", root_partition)`
+    Uses regular expression substitution to extract the disk identifier:
+    - Pattern `r"\d+$"` matches one or more trailing digits at string end
+    - Replacement `""` removes matched digits
+    - Example: `/dev/sda2` becomes `/dev/sda`
+
+**GRUB Reinstallation:**
+`run_in_chroot(f"grub-install {disk}")`
+    Executes `grub-install` within chroot, installing the GRUB bootloader to the specified disk.
+
+**Boot Configuration Update:**
+`run_in_chroot("update-grub")`
+    Executes `update-grub` within chroot, scanning installed kernels and regenerating GRUB configuration.
+
+**Completion Notification:**
+`print("\n[✔] GRUB repair completed successfully!")`
+    Displays success confirmation.
+
+`print("You can now reboot your system.")`
+    Provides reboot instructions.
+
+**Unsupported Distribution Message:**
+`else:`
+    For non-Ubuntu Debian derivatives or other distributions:
+    `print(f"[!] Automatic repair for {distro} is not implemented yet.")`
+    Informs user that automated repair is unavailable for this distribution variant.
+
+**Module Invocation:**
+`scanning_files()`
+    The module terminates with automatic invocation of the `scanning_files()` function when the script executes.
+
+4. OPERATIONAL FLOW
+===================
+
+1. Script execution commences with privilege verification via `main()`.
+2. Upon successful root privilege verification, `scanning_files()` is invoked.
+3. Console display is cleared and the application header is shown.
+4. Available storage devices and partitions are enumerated via `list_partitions()`.
+5. User interaction designates the target root partition via `mount_system()`.
+6. Optional EFI partition mounting is offered and processed.
+7. Distribution identification occurs via `detect_distro()` by parsing `/mnt/etc/os-release`.
+8. Virtual filesystems are bind-mounted via `prepare_chroot()` to establish the chroot environment.
+9. For Debian-based systems, GRUB repair is executed via chroot invocations.
+10. Success notification directs the user to reboot the system.
+
+5. LIMITATIONS AND PROSPECTIVE ENHANCEMENTS
+===========================================
+
+* Compatibility is presently limited to Debian and Ubuntu derivative distributions.
+* UEFI boot restoration capabilities remain rudimentary and may necessitate manual intervention.
+* Recovery routines for alternative distributions (Fedora, Arch, etc.) are not yet implemented.
+* Command execution within chroot uses simple string splitting, potentially problematic for arguments containing spaces.
+* Extensive filesystem damage may necessitate manual troubleshooting procedures.
+
+6. SECURITY AND OPERATIONAL CONSIDERATIONS
+==========================================
+
+* This utility requires root-level administrative privileges for all operations.
+* Mount and repair operations carry inherent risk of data loss or corruption.
+* User verification of partition identification is mandatory prior to initiating recovery procedures.
+* The `--bind` mount option creates shared mounts; improper unmounting sequence may affect host system access to filesystems.
+* This tool is intended as an initial recovery mechanism; extensive damage warrants professional assessment and intervention.
+
+7. REGULAR EXPRESSIONS USED
+===========================
+
+The utility employs one regular expression pattern:
+
+`r"\d+$"`
+    Pattern components:
+    - `\d` — Matches decimal digits (0-9)
+    - `+` — Quantifier requiring one or more occurrences
+    - `$` — Anchor matching the string end
+    - Effect: Removes trailing digits from partition paths to extract disk identifiers
+
+8. SUBPROCESS OPERATIONS SUMMARY
+================================
+
+The utility executes the following external commands:
+
+* `clear` — Clears terminal output
+* `lsblk` — Lists block devices with specified attributes
+* `mount` — Mounts filesystems with `--bind` option for virtual filesystems
+* `umount` — Unmounts filesystems with `-R` option for recursive unmounting
+* `chroot` — Changes root directory for command execution
+* `grub-install` — Installs GRUB bootloader
+* `update-grub` — Regenerates GRUB configuration
+
+All subprocess invocations utilize `text=True` for string output decoding where output capture occurs.
